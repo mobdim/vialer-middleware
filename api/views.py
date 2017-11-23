@@ -112,6 +112,10 @@ class IncomingCallView(VialerAPIView):
         caller_id = serialized_data['caller_id']
         phonenumber = serialized_data['phonenumber']
         call_id = serialized_data['call_id']
+        reason = ''
+
+        if 'reason' in serialized_data.keys():
+            reason = serialized_data['reason']
 
         if not call_id:
             # Generate unique_key for reference on incoming call answer.
@@ -188,9 +192,10 @@ class IncomingCallView(VialerAPIView):
                     # Succes status for asterisk.
                     return Response('status=ACK')
                 elif available == 'False':
-                    logger.info('{0} | {1} Device not available, sending NAK on {2}'.format(
+                    logger.info('{0} | {1} Device not available, because {2}, sending NAK on {3}'.format(
                         unique_key,
                         device.app.platform.upper(),
+                        reason,
                         datetime.datetime.fromtimestamp(time.time()).strftime('%H:%M:%S.%f'))
                     )
                     # App is not available.
