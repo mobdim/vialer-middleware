@@ -1,6 +1,5 @@
 import datetime
 import json
-import logging
 import random
 import time
 
@@ -17,13 +16,12 @@ from rest_framework.status import (HTTP_200_OK, HTTP_201_CREATED,
 from app.cache import RedisClusterCache
 from app.models import App, Device
 from app.tasks import log_to_db, task_incoming_call_notify, task_notify_old_token
+from app.utils import log_middleware_information, INFO, WARNING, EXCEPTION
 
 from .authentication import VoipgridAuthentication
 from .renderers import PlainTextRenderer
 from .serializers import (CallResponseSerializer, IncomingCallSerializer,
                           DeviceSerializer, DeleteDeviceSerializer)
-
-logger = logging.getLogger('django')
 
 
 class VialerAPIView(views.APIView):
@@ -63,10 +61,13 @@ class VialerAPIView(views.APIView):
         serializer = self.serializer_class(data=data)
         if not serializer.is_valid(raise_exception=False):
             # Log errors.
-            logger.info('BAD REQUEST! Serialization failed with following errors:\n\n{0}\n\nData:\n\n{1}'.format(
-                serializer.errors,
-                data,
-            ))
+            log_middleware_information(
+                'BAD REQUEST! Serialization failed with following errors:\n\n{0}\n\nData:\n\n{1}'.format(
+                    serializer.errors,
+                    data,
+                ),
+                INFO
+            )
             # This raises a bad request response.
             raise ParseError(detail=None)
 
@@ -120,27 +121,37 @@ class IncomingCallView(VialerAPIView):
         else:
             unique_key = call_id
 
-        logger.info('{0} | Incoming call for SIP:{1} FROM:\'{2}/{3}\' (POST:{4})'.format(
-            unique_key,
-            sip_user_id,
-            phonenumber,
-            caller_id,
-            json.dumps(request.POST, ensure_ascii=False))
-        )
         try:
             # Check if there is a registered device for given sip_user_id.
             device = get_object_or_404(Device, sip_user_id=sip_user_id)
         except Http404:
-            logger.warning('{0} | Failed to find a device for SIP_user_ID : {1} sending NAK'.format(
-                unique_key,
-                sip_user_id)
+            log_middleware_information(
+                '{0} | Failed to find a device for SIP_user_ID : {1} sending NAK'.format(
+                    unique_key,
+                    sip_user_id,
+                ),
+                WARNING,
             )
         except Exception:
-            logger.exception('{0} | EXCEPTION WHILE FINDING DEVICE FOR SIP_USER_ID : {1}'.format(
+            log_middleware_information(
+                '{0} | EXCEPTION WHILE FINDING DEVICE FOR SIP_USER_ID : {1}'.format(
                 unique_key,
-                sip_user_id)
+                sip_user_id,
+                ),
+                EXCEPTION,
             )
         else:
+            log_middleware_information(
+                '{0} | Incoming call for SIP:{1} FROM:\'{2}/{3}\' (POST:{4})'.format(
+                    unique_key,
+                    sip_user_id,
+                    phonenumber,
+                    caller_id,
+                    json.dumps(request.POST, ensure_ascii=False),
+                ),
+                INFO,
+                device=device
+            )
 
             attempt = 1
             # Send push message to wake up app.
@@ -168,11 +179,15 @@ class IncomingCallView(VialerAPIView):
             # available flag. Done for logging purposes.
             redis_cache.set(cache_key, device.app.platform)
 
-            logger.info('{0} | {1} Starting \'wait for it\' loop until {2} ({3}msec)'.format(
-                unique_key,
-                device.app.platform.upper(),
-                datetime.datetime.fromtimestamp(wait_until).strftime('%H:%M:%S.%f'),
-                settings.APP_PUSH_ROUNDTRIP_WAIT)
+            log_middleware_information(
+                '{0} | {1} Starting \'wait for it\' loop until {2} ({3}msec)'.format(
+                    unique_key,
+                    device.app.platform.upper(),
+                    datetime.datetime.fromtimestamp(wait_until).strftime('%H:%M:%S.%f'),
+                    settings.APP_PUSH_ROUNDTRIP_WAIT,
+                ),
+                INFO,
+                device=device,
             )
             # We have to wait till the app responds and sets the cache value.
             while time.time() < wait_until:
@@ -180,18 +195,27 @@ class IncomingCallView(VialerAPIView):
                 # Get on an empty key returns None so we need to check for
                 # True and False.
                 if available == 'True':
-                    logger.info('{0} | {1} Device checked in on time, sending ACK on {2}'.format(
-                        unique_key,
-                        device.app.platform.upper(),
-                        datetime.datetime.fromtimestamp(time.time()).strftime('%H:%M:%S.%f'))
+
+                    log_middleware_information(
+                        '{0} | {1} Device checked in on time, sending ACK on {2}'.format(
+                            unique_key,
+                            device.app.platform.upper(),
+                            datetime.datetime.fromtimestamp(time.time()).strftime('%H:%M:%S.%f'),
+                        ),
+                        INFO,
+                        device=device,
                     )
                     # Succes status for asterisk.
                     return Response('status=ACK')
                 elif available == 'False':
-                    logger.info('{0} | {1} Device not available, sending NAK on {2}'.format(
-                        unique_key,
-                        device.app.platform.upper(),
-                        datetime.datetime.fromtimestamp(time.time()).strftime('%H:%M:%S.%f'))
+                    log_middleware_information(
+                        '{0} | {1} Device not available, sending NAK on {2}'.format(
+                            unique_key,
+                            device.app.platform.upper(),
+                            datetime.datetime.fromtimestamp(time.time()).strftime('%H:%M:%S.%f')
+                        ),
+                        INFO,
+                        device=device,
                     )
                     # App is not available.
                     return Response('status=NAK')
@@ -211,10 +235,14 @@ class IncomingCallView(VialerAPIView):
 
                     time.sleep(.01)  # wait 10 ms
 
-            logger.info('{0} | {1} Device did NOT check in on time, sending NAK on {2}'.format(
-                unique_key,
-                device.app.platform.upper(),
-                datetime.datetime.fromtimestamp(time.time()).strftime('%H:%M:%S.%f'))
+            log_middleware_information(
+                '{0} | {1} Device did NOT check in on time, sending NAK on {2}'.format(
+                    unique_key,
+                    device.app.platform.upper(),
+                    datetime.datetime.fromtimestamp(time.time()).strftime('%H:%M:%S.%f'),
+                ),
+                INFO,
+                device=device,
             )
 
         # Failed status for asterisk.
@@ -258,9 +286,12 @@ class CallResponseView(VialerAPIView):
 
         roundtrip = time.time() - float(message_start_time)
 
-        logger.info('{0} | Device responded. Message round trip-time: {1} sec'.format(
-            unique_key,
-            roundtrip)
+        log_middleware_information(
+            '{0} | Device responded. Message round trip-time: {1} sec'.format(
+                unique_key,
+                roundtrip,
+            ),
+            INFO,
         )
 
         # Threaded task to log information to the database.
@@ -289,6 +320,9 @@ class DeviceView(VialerAPIView):
         token = serialized_data['token']
         sip_user_id = serialized_data['sip_user_id']
         app_id = serialized_data['app']
+        remote_logging_id = None
+        if 'remote_logging_id' in serialized_data.keys():
+            remote_logging_id = serialized_data['remote_logging_id']
 
         app = get_object_or_404(App, app_id=app_id, platform=platform)
 
@@ -301,6 +335,7 @@ class DeviceView(VialerAPIView):
                 sip_user_id=sip_user_id,
                 app_id=app.id,
                 token=token,
+                remote_logging_id=remote_logging_id,
             )
             created = True
 
@@ -315,6 +350,11 @@ class DeviceView(VialerAPIView):
             else:
                 status += ' and updated token'
             device.token = token
+
+        # Update remote_logging_id.
+        if device.remote_logging_id != remote_logging_id:
+            device.remote_logging_id = remote_logging_id
+            status += ', updated the remote_logging_id'
 
         # Update fields.
         device.name = serialized_data.get('name', None)
@@ -331,12 +371,16 @@ class DeviceView(VialerAPIView):
         if created:
             status_code = HTTP_201_CREATED
 
-        logger.info('{0} {1} device:{2} registered for SIP_USER_ID: {3}. Status: {4}.'.format(
-            app.app_id,
-            device.app.platform.upper(),
-            device.token,
-            sip_user_id,
-            status)
+        log_middleware_information(
+            '{0} {1} device:{2} registered for SIP_USER_ID: {3}. Status: {4}.'.format(
+                app.app_id,
+                device.app.platform.upper(),
+                device.token,
+                sip_user_id,
+                status,
+            ),
+            INFO,
+            device=device,
         )
         return Response('', status=status_code)
 
@@ -360,13 +404,23 @@ class DeviceView(VialerAPIView):
             )
             device.delete()
         except Http404:
-            logger.warning('Could not unregister device {0} for SIP_USER_ID {1}'.format(token, sip_user_id))
-            raise
-        except Exception:
-            logger.exception('EXCEPTION WHILE UNREGISTERING DEVICE {0} FOR SIP_USER_ID : {1}'.format(
-                token,
-                sip_user_id)
+            log_middleware_information(
+                'Could not unregister device {0} for SIP_USER_ID {1}'.format(token, sip_user_id),
+                WARNING,
             )
             raise
-        logger.info('Unregistered device {0} for SIP_USER_ID {1}'.format(token, sip_user_id))
+        except Exception:
+            log_middleware_information(
+                'EXCEPTION WHILE UNREGISTERING DEVICE {0} FOR SIP_USER_ID : {1}'.format(
+                    token,
+                    sip_user_id,
+                ),
+                EXCEPTION,
+            )
+            raise
+        log_middleware_information(
+            'Unregistered device {0} for SIP_USER_ID {1}'.format(token, sip_user_id),
+            INFO,
+            device=device,
+        )
         return Response('', status=HTTP_200_OK)

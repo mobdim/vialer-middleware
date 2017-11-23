@@ -1,5 +1,4 @@
 import datetime
-import logging
 import os
 from time import time
 from urllib.parse import urljoin
@@ -11,9 +10,8 @@ from gcm.gcm import GCM, GCMAuthenticationException
 from pyfcm import FCMNotification
 from pyfcm.errors import AuthenticationError, InternalPackageError, FCMServerError
 
+from app.utils import log_middleware_information, WARNING, INFO, EXCEPTION, ERROR
 from .models import APNS_PLATFORM, GCM_PLATFORM, ANDROID_PLATFORM
-
-logger = logging.getLogger('django')
 
 
 TYPE_CALL = 'call'
@@ -43,8 +41,15 @@ def send_call_message(device, unique_key, phonenumber, caller_id, attempt):
     elif device.app.platform == ANDROID_PLATFORM:
         send_fcm_message(device, device.app, TYPE_CALL, data)
     else:
-        logger.warning('{0} | Trying to sent \'call\' notification to unknown platform:{1} device:{2}'.format(
-            unique_key, device.app.platform, device.token))
+        log_middleware_information(
+            '{0} | Trying to sent \'call\' notification to unknown platform:{1} device:{2}'.format(
+                unique_key,
+                device.app.platform,
+                device.token,
+            ),
+            WARNING,
+            device=device,
+        )
 
 
 def send_text_message(device, app, message):
@@ -62,8 +67,14 @@ def send_text_message(device, app, message):
     elif app.platform == ANDROID_PLATFORM:
         send_fcm_message(device, app, TYPE_MESSAGE, {'message': message})
     else:
-        logger.warning('Trying to sent \'message\' notification to unknown platform:{0} device:{1}'.format(
-            app.platform, device.token))
+        log_middleware_information(
+            'Trying to sent \'message\' notification to unknown platform:{0} device:{1}'.format(
+                app.platform,
+                device.token,
+            ),
+            WARNING,
+            device=device,
+        )
 
 
 def get_call_push_payload(unique_key, phonenumber, caller_id):
@@ -130,7 +141,14 @@ def send_apns_message(device, app, message_type, data=None):
     elif message_type == TYPE_MESSAGE:
         message = Message(token_list, payload=get_message_push_payload(data['message']))
     else:
-        logger.warning('{0} | TRYING TO SENT MESSAGE OF UNKNOWN TYPE: {1}', unique_key, message_type)
+        log_middleware_information(
+            '{0} | TRYING TO SENT MESSAGE OF UNKNOWN TYPE: {1}'.format(
+                unique_key,
+                message_type,
+            ),
+            WARNING,
+            device=device,
+        )
 
     session = Session()
 
@@ -145,13 +163,25 @@ def send_apns_message(device, app, message_type, data=None):
     srv = APNs(con)
 
     try:
-        logger.info('{0} | Sending APNS \'{1}\' message at time:{2} to {3} Data:{4}'.
-                    format(unique_key, message_type,
-                           datetime.datetime.fromtimestamp(time()).strftime('%H:%M:%S.%f'), device.token, data))
+        log_middleware_information(
+            '{0} | Sending APNS \'{1}\' message at time:{2} to {3} Data:{4}'.format(
+                unique_key,
+                message_type,
+                datetime.datetime.fromtimestamp(time()).strftime('%H:%M:%S.%f'),
+                device.token,
+                data,
+            ),
+            INFO,
+            device=device,
+        )
         res = srv.send(message)
 
     except Exception:
-        logger.exception('{0} | Error sending APNS message'.format(unique_key,))
+        log_middleware_information(
+            '{0} | Error sending APNS message'.format(unique_key),
+            EXCEPTION,
+            device=device,
+        )
 
     else:
         # Check failures. Check codes in APNs reference docs.
@@ -159,17 +189,34 @@ def send_apns_message(device, app, message_type, data=None):
             code, errmsg = reason
             # According to APNs protocol the token reported here
             # is garbage (invalid or empty), stop using and remove it.
-            logger.warning('{0} | Sending APNS message failed for device: {1}, reason: {2}'.format(
-                unique_key, token, errmsg)
+            log_middleware_information(
+                '{0} | Sending APNS message failed for device: {1}, reason: {2}'.format(
+                    unique_key,
+                    token,
+                    errmsg,
+                ),
+                WARNING,
+                device=device,
             )
 
         # Check failures not related to devices.
         for code, errmsg in res.errors:
-            logger.warning('{0} | Error sending APNS message. \'{1}\''.format(unique_key, errmsg))
+            log_middleware_information(
+                '{0} | Error sending APNS message. \'{1}\''.format(
+                    unique_key,
+                    errmsg,
+                ),
+                WARNING,
+                device=device,
+            )
 
         # Check if there are tokens that can be retried.
         if res.needs_retry():
-            logger.info('{0} | Could not sent APNS message, retrying...')
+            log_middleware_information(
+                '{0} | Could not sent APNS message, retrying...',
+                INFO,
+                device=device,
+            )
             # Repeat with retry_message or reschedule your task.
             res.retry()
 
@@ -190,7 +237,14 @@ def send_fcm_message(device, app, message_type, data=None):
     elif message_type == TYPE_MESSAGE:
         message = get_message_push_payload(data['message'])
     else:
-        logger.warning('{0} | Trying to sent message of unknown type: {1}'.format(unique_key, message_type))
+        log_middleware_information(
+            '{0} | Trying to sent message of unknown type: {1}'.format(
+                unique_key,
+                message_type,
+            ),
+            WARNING,
+            device=device,
+        )
 
     push_service = FCMNotification(api_key=app.push_key)
 
@@ -198,26 +252,57 @@ def send_fcm_message(device, app, message_type, data=None):
         start_time = time()
         result = push_service.notify_single_device(registration_id=registration_id, data_message=message)
     except AuthenticationError:
-        logger.error('{0} | Our Google API key was rejected!!!'.format(unique_key))
+        log_middleware_information(
+            '{0} | Our Google API key was rejected!!!'.format(unique_key),
+            ERROR,
+            device=device,
+        )
     except InternalPackageError:
-        logger.error('{0} | Bad api request made by package.'.format(unique_key))
+        log_middleware_information(
+            '{0} | Bad api request made by package.'.format(unique_key),
+            ERROR,
+            device=device,
+        )
     except FCMServerError:
-        logger.error('{0} | FCM Server error.'.format(unique_key))
+        log_middleware_information(
+            '{0} | FCM Server error.'.format(unique_key),
+            ERROR,
+            device=device,
+        )
     else:
         if result.get('success'):
-            logger.info('{0} | FCM \'{1}\' message sent at time:{2} to {3} Data:{4}'
-                        .format(unique_key,
-                                message_type,
-                                datetime.datetime.fromtimestamp(start_time).strftime('%H:%M:%S.%f'),
-                                registration_id,
-                                data,)
-                        )
+            log_middleware_information(
+                '{0} | FCM \'{1}\' message sent at time:{2} to {3} Data:{4}'.format(
+                    unique_key,
+                    message_type,
+                    datetime.datetime.fromtimestamp(start_time).strftime('%H:%M:%S.%f'),
+                    registration_id,
+                    data,
+                ),
+                INFO,
+                device=device,
+            )
 
         if result.get('failure'):
-            logger.warning('%s | Should remove %s because %s' % (unique_key, registration_id, result['results']))
+            log_middleware_information(
+                '{0} | Should remove {1} because {2}'.format(
+                    unique_key,
+                    registration_id,
+                    result['results'],
+                ),
+                WARNING,
+                device=device,
+            )
 
         if result.get('canonical_ids'):
-            logger.warning('%s | Should replace device token %s' % (unique_key, registration_id))
+            log_middleware_information(
+                '{0} | Should replace device token {1}'.format(
+                    unique_key,
+                    registration_id,
+                ),
+                WARNING,
+                device=device,
+            )
 
 
 def send_gcm_message(device, app, message_type, data=None):
@@ -238,7 +323,14 @@ def send_gcm_message(device, app, message_type, data=None):
     elif message_type == TYPE_MESSAGE:
         message = get_message_push_payload(data['message'])
     else:
-        logger.warning('{0} | Trying to sent message of unknown type: {1}'.format(unique_key, message_type))
+        log_middleware_information(
+            '{0} | Trying to sent message of unknown type: {1}'.format(
+                unique_key,
+                message_type,
+            ),
+            WARNING,
+            device=device,
+        )
 
     gcm = GCM(app.push_key)
 
@@ -257,30 +349,60 @@ def send_gcm_message(device, app, message_type, data=None):
 
         if success:
             for reg_id, msg_id in success.items():
-                logger.info('{0} | GCM \'{1}\' message sent at time:{2} to {3} Data:{4}'
-                            .format(unique_key,
-                                    message_type,
-                                    datetime.datetime.fromtimestamp(start_time).strftime('%H:%M:%S.%f'),
-                                    reg_id,
-                                    data,)
-                            )
+                log_middleware_information(
+                    '{0} | GCM \'{1}\' message sent at time:{2} to {3} Data:{4}'.format(
+                        unique_key,
+                        message_type,
+                        datetime.datetime.fromtimestamp(start_time).strftime('%H:%M:%S.%f'),
+                        reg_id,
+                        data,
+                    ),
+                    INFO,
+                    device=device,
+                )
 
         if canonical:
             for reg_id, new_reg_id in canonical.items():
-                logger.warning('%s | Should replace device token %s with %s in database' % (
-                               unique_key, reg_id, new_reg_id))
+                log_middleware_information(
+                    '{0} | Should replace device token {1} with {2} in database'.format(
+                        unique_key,
+                        reg_id,
+                        new_reg_id,
+                    ),
+                    WARNING,
+                    device=device,
+                )
 
         if errors:
             for err_code, reg_id in errors.items():
-                logger.warning(
-                    '%s | Should remove %s because %s' % (unique_key, reg_id, err_code))
+                log_middleware_information(
+                    '{0} | Should remove {1} because {2}'.format(
+                        unique_key,
+                        reg_id,
+                        err_code,
+                    ),
+                    WARNING,
+                    device=device,
+                )
 
     except GCMAuthenticationException:
         # Stop and fix your settings.
-        logger.error('{0} | Our Google API key was rejected!!!'.format(unique_key))
+        log_middleware_information(
+            '{0} | Our Google API key was rejected!!!'.format(unique_key),
+            ERROR,
+            device=device,
+        )
     except ValueError:
         # Probably your extra options, such as time_to_live,
         # are invalid. Read error message for more info.
-        logger.error('{0} | Invalid message/option or invalid GCM response'.format(unique_key))
+        log_middleware_information(
+            '{0} | Invalid message/option or invalid GCM response'.format(unique_key),
+            ERROR,
+            device=device,
+        )
     except Exception:
-        logger.exception('{0} | Error sending GCM message'.format(unique_key))
+        log_middleware_information(
+            '{0} | Error sending GCM message'.format(unique_key),
+            EXCEPTION,
+            device=device,
+        )

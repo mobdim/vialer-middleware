@@ -25,3 +25,6 @@ coverage==4.4.1
 
 # Logging.
 raven==6.1.0
+
+# Logging to Logentries
+logentries==0.17

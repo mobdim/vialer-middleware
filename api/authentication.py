@@ -1,5 +1,3 @@
-import logging
-
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
 from rest_framework.authentication import BaseAuthentication, get_authorization_header
@@ -7,10 +5,10 @@ from rest_framework.exceptions import (AuthenticationFailed, NotAuthenticated,
                                        ParseError, PermissionDenied)
 import requests
 
+from app.models import Device
+from app.utils import log_middleware_information, WARNING, INFO
 from .exceptions import UnavailableException
 from .serializers import SipUserIdSerializer
-
-logger = logging.getLogger('django')
 
 
 class VoipgridAuthentication(BaseAuthentication):
@@ -32,7 +30,10 @@ class VoipgridAuthentication(BaseAuthentication):
             raise PermissionDenied(detail=None)
         else:
             # Temporarily unavailable.
-            logger.warning('Unsupported VG response code {0}'.format(status_code))
+            log_middleware_information(
+                'Unsupported VG response code {0}'.format(status_code),
+                WARNING,
+            )
             raise UnavailableException(detail=None)
 
     def authenticate(self, request):
@@ -52,9 +53,12 @@ class VoipgridAuthentication(BaseAuthentication):
         # Serialize data to check for sip_user_id.
         serializer = SipUserIdSerializer(data=request.data)
         if not serializer.is_valid(raise_exception=False):
-            logger.info('BAD REQUEST! Authentication failed due to invalid sip_user_id in data:\n\n{1}'.format(
-                request.data,
-            ))
+            log_middleware_information(
+                'BAD REQUEST! Authentication failed due to invalid sip_user_id in data:\n\n{1}'.format(
+                    request.data,
+                ),
+                INFO,
+            )
             # This raises a bad request response.
             raise ParseError(detail=None)
 
@@ -77,10 +81,14 @@ class VoipgridAuthentication(BaseAuthentication):
 
         if not app_account_url:
             # Has no app account and thus no access to api.
-            logger.info('No app account for systemuser {0} - {1}'.format(
-                json_response['id'],
-                json_response['email'],
-                ))
+            log_middleware_information(
+                'No app account for systemuser {0} - {1}'.format(
+                    json_response['id'],
+                    json_response['email'],
+                ),
+                INFO,
+                device=Device.objects.get(sip_user_id=sip_user_id),
+            )
             raise PermissionDenied(detail=None)
 
         # Get url for app account.
